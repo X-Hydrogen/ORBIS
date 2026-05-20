@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# ORCA output binaries (huge files)
+*.gbw
+*.densities
+*.densitiesinfo
+*.hess
+*.engrad
+*.opt
+*.tmp
+*.chg
+*.wfn
+*.wfx
+
+# VMD temp files
+*.tga
+*.tcl
+
+# Workspace (calculation outputs)
+workspace/*/Fukui/TZVP*/
+workspace/*/electronic_structure/*/TZVP*/
+workspace/h2o_study/
+workspace/h2o_dimer/electronic_structure/CDFT/
+workspace/h2o_dimer/electronic_structure/Fukui/TZVP*/
+workspace/h2o_dimer/electronic_structure/SP/
+
+# Large output files (>5MB)
+*.out
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Paper outputs (generated, not source)
+workspace/*_paper/
+workspace/*_paper_*/
