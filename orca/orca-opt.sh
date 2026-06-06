@@ -9,24 +9,26 @@
 #  Copyright:  (C) 2024-2026 Hengyue Xu. All rights reserved.
 #
 #  Description:
-#    Standalone geometry optimization module. Three calculation modes:
+#    Standalone geometry optimization module. Four calculation modes:
 #      Mode 1: Direct publication-quality optimization (optimization/ with no subfolders)
 #      Mode 2: Two-step: low_opt/ (simple) -> optimization/ (publication quality)
 #      Mode 3: Single-point only at publication quality (optimization/, creates ATTENTION_single_point)
+#      Mode 4: PBE0 def2-SVP opt -> PBE0 def2-TZVP(-f) SP (iqcap_orca.env uses TZVP baseline)
 #
 #  Output: optimization/
 #    Mode 1: optimization/opt.inp, opt.out, opt.xyz
 #    Mode 2: optimization/low_opt/opt.*, then optimization/opt.*
 #    Mode 3: optimization/opt.xyz (copy of input), optimization/sp.*, ATTENTION_single_point
+#    Mode 4: optimization/opt.* (PBE0 def2-SVP), optimization/sp.* (PBE0 def2-TZVP(-f))
 #    Always (on success): optimization/iqcap_orca.env — ORCA baseline for downstream modules
 #
-#  Theory presets: --method 0..4 (default 1) set PBE / PBE0 / B3LYP / M06-2X / ωB97X-D3 families;
+#  Theory presets: --method 0..5 (default 1) set PBE / PBE0 / B3LYP / M06-2X / ωB97X-D3 families;
 #  override any piece with --opt-low / --opt-pub / --sp-level after --method on the command line.
 #
 #  External dependencies: ORCA, orca_2aim, orca_2mkl (for molden/wfn for downstream reuse)
 #
 #  Usage:
-#    bash iqcap-opt.sh --mode 1|2|3 [options]
+#    bash iqcap-opt.sh --mode 1|2|3|4 [options]
 #
 ###############################################################################
 
@@ -50,10 +52,10 @@ NPROCS=16
 MAXCORE=4096
 OUTPUT_DIR="optimization"
 
-# Mode: 1=direct pub opt, 2=low+pub opt, 3=single-point only
+# Mode: 1=direct pub opt, 2=low+pub opt, 3=single-point only, 4=PBE0 SVP opt + PBE0 TZVP SP
 MODE=1
 
-# Method preset (0–4). Fills OPT_LEVEL_* / SP_LEVEL unless overridden by --opt-low / --opt-pub / --sp-level.
+# Method preset (0–5). Fills OPT_LEVEL_* / SP_LEVEL unless overridden by --opt-low / --opt-pub / --sp-level.
 METHOD=1
 
 # Filled by apply_method_preset (after CLI); empty until then
@@ -95,12 +97,13 @@ while [[ $# -gt 0 ]]; do
 $IQCAP_NAME v$IQCAP_VERSION -- $IQCAP_FULLNAME
 Module: $IQCAP_MODULE (Geometry Optimization)
 
-Usage: bash iqcap-opt.sh --mode 1|2|3 [options]
+Usage: bash iqcap-opt.sh --mode 1|2|3|4 [options]
 
   --mode INT           Calculation mode (required):
                         1 = Direct publication-quality optimization (no subfolders)
                         2 = Two-step: low_opt/ (simple) -> optimization/ (pub)
                         3 = Single-point only (creates ATTENTION_single_point)
+                        4 = PBE0 def2-SVP opt -> PBE0 def2-TZVP(-f) SP (iqcap_orca.env = method 1 TZVP)
 
   --method INT         Theory preset (default: 1). Sets --opt-low / --opt-pub / --sp-level unless you override those later on the command line:
                         0 = PBE D3BJ def2-SVP def2/J opt (quick)
@@ -108,7 +111,9 @@ Usage: bash iqcap-opt.sh --mode 1|2|3 [options]
                         2 = B3LYP D3BJ def2-TZVP(-f) def2/J RIJCOSX opt
                         3 = M06-2X def2-TZVP(-f) def2/J RIJCOSX opt
                         4 = ωB97X-D3 def2-TZVP(-f) def2/J RIJCOSX opt
-                       Mode 2 uses a def2-SVP low step for methods 1–4; if low == pub (method 0), only one optimization is run.
+                        5 = PBE0 D3BJ def2-SVP def2/J RIJCOSX opt
+                       Mode 2 uses a def2-SVP low step for methods 1–4; if low == pub (methods 0 or 5), only one optimization is run.
+                       Mode 4 ignores --method and always runs method 5 opt then method 1 SP.
                        Writes optimization/iqcap_orca.env so iqcap-basic_elect_analysis, iqcap-elect_interaction, iqcap-G, and iqcap-adsorption_energy default to the same ORCA baseline.
 
   --xyz FILE           Input XYZ (default: 0.xyz)
@@ -128,6 +133,7 @@ Output structure:
   Mode 1: optimization/opt.inp, opt.out, opt.xyz
   Mode 2: optimization/low_opt/opt.*, then optimization/opt.*
   Mode 3: optimization/opt.xyz (input copy), optimization/sp.*, ATTENTION_single_point
+  Mode 4: optimization/opt.* (PBE0 def2-SVP), optimization/sp.* (PBE0 def2-TZVP(-f))
 
 opt.xyz is also written to project root for downstream iqcap-basic_elect_analysis.sh
 
@@ -166,8 +172,12 @@ apply_method_preset() {
       pub_def="ωB97X-D3 def2-TZVP(-f) def2/J RIJCOSX opt"
       low_def="ωB97X-D3 def2-SVP def2/J RIJCOSX opt"
       ;;
+    5)
+      pub_def="PBE0 D3BJ def2-SVP def2/J RIJCOSX opt"
+      low_def="$pub_def"
+      ;;
     *)
-      echo "Invalid --method: $METHOD (expected 0, 1, 2, 3, or 4)" >&2
+      echo "Invalid --method: $METHOD (expected 0, 1, 2, 3, 4, or 5)" >&2
       exit 1
       ;;
   esac
@@ -177,11 +187,12 @@ apply_method_preset() {
 }
 
 write_iqcap_orca_env() {
-  local base="${OPT_LEVEL_PUB% opt}"
+  local base="${1:-${OPT_LEVEL_PUB% opt}}"
+  local method="${2:-$METHOD}"
   mkdir -p "$OUTPUT_DIR"
   {
     echo "# Written by iqcap-opt.sh — sourced by other IQCAP modules for matching ORCA theory."
-    echo "IQCAP_METHOD=$METHOD"
+    echo "IQCAP_METHOD=$method"
     printf 'IQCAP_ORCA_BASE=%q\n' "$base"
   } > "$OUTPUT_DIR/iqcap_orca.env"
 }
@@ -278,7 +289,7 @@ apply_method_preset
 ###############################################################################
 # Pre-checks
 ###############################################################################
-[[ "$MODE" =~ ^[123]$ ]] || { echo "Invalid --mode. Use 1, 2, or 3." >&2; exit 1; }
+[[ "$MODE" =~ ^[1234]$ ]] || { echo "Invalid --mode. Use 1, 2, 3, or 4." >&2; exit 1; }
 [[ -f "$XYZ_FILE" ]] || { echo "XYZ file not found: $XYZ_FILE" >&2; exit 1; }
 
 ORCA_EXE="$(resolve_bin_any "$ORCA_BIN" "orca")" || { echo "Cannot find ORCA executable" >&2; exit 1; }
@@ -293,7 +304,11 @@ echo " $IQCAP_NAME v$IQCAP_VERSION"
 echo " Module: $IQCAP_MODULE"
 echo "========================================"
 echo "  Mode:    $MODE"
-echo "  Method:  $METHOD  (opt-pub: $OPT_LEVEL_PUB)"
+if [[ "$MODE" -eq 4 ]]; then
+  echo "  Method:  5 -> 1  (PBE0 def2-SVP opt, then PBE0 def2-TZVP(-f) SP)"
+else
+  echo "  Method:  $METHOD  (opt-pub: $OPT_LEVEL_PUB)"
+fi
 echo "  ORCA:    $ORCA_EXE"
 [[ "$MAY_REUSE" -eq 1 ]] && echo "  orca_2aim / orca_2mkl: enabled (downstream reuse)"
 echo "  Output:  $PWD/$OUTPUT_DIR/"
@@ -402,6 +417,44 @@ ATTN
   gen_molden_wfn_for_reuse "sp"
   write_iqcap_orca_env
   echo "  opt.xyz -> $OUTPUT_DIR/opt.xyz and ./opt.xyz"
+fi
+
+###############################################################################
+# Mode 4: PBE0 def2-SVP opt -> PBE0 def2-TZVP(-f) single-point
+###############################################################################
+if [[ "$MODE" -eq 4 ]]; then
+  MODE4_OPT_LEVEL="PBE0 D3BJ def2-SVP def2/J RIJCOSX opt"
+  MODE4_SP_LEVEL="PBE0 D3BJ def2-TZVP(-f) def2/J RIJCOSX tightSCF"
+  MODE4_ENV_BASE="PBE0 D3BJ def2-TZVP(-f) def2/J RIJCOSX"
+
+  echo "[*] Mode 4: PBE0 def2-SVP optimization -> PBE0 def2-TZVP(-f) single-point"
+  echo "  Step 1: PBE0 def2-SVP optimization in $OUTPUT_DIR/"
+  pushd "$OUTPUT_DIR" >/dev/null
+  write_orca_input "opt.inp" "$MODE4_OPT_LEVEL" "$N_CHARGE" "$N_MULT" "../$XYZ_FILE"
+  "$ORCA_EXE" opt.inp > opt.out
+  popd >/dev/null
+
+  if [[ ! -f "$OUTPUT_DIR/opt.xyz" ]]; then
+    echo "ERROR: Optimization failed, opt.xyz not generated" >&2
+    exit 1
+  fi
+
+  if check_orca_success "$OUTPUT_DIR/opt.out"; then
+    cp "$OUTPUT_DIR/opt.xyz" opt.xyz
+    echo "  opt.xyz -> $OUTPUT_DIR/opt.xyz and ./opt.xyz"
+  else
+    echo "WARNING: Optimization may not have converged. Check $OUTPUT_DIR/opt.out" >&2
+    cp "$OUTPUT_DIR/opt.xyz" opt.xyz 2>/dev/null || true
+  fi
+
+  echo "  Step 2: PBE0 def2-TZVP(-f) single-point in $OUTPUT_DIR/"
+  pushd "$OUTPUT_DIR" >/dev/null
+  write_orca_input "sp.inp" "$MODE4_SP_LEVEL" "$N_CHARGE" "$N_MULT" "opt.xyz"
+  "$ORCA_EXE" sp.inp > sp.out
+  popd >/dev/null
+
+  gen_molden_wfn_for_reuse "sp"
+  write_iqcap_orca_env "$MODE4_ENV_BASE" 1
 fi
 
 echo ""

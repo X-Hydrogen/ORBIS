@@ -78,7 +78,7 @@ Workflow:
   Phase 1 — Geometry optimization: run_orca with opt keyword
   Phase 2 — Frequency analysis: run_orca with freq keyword → verify no imaginary modes
   Phase 3 — iQCAP basic_elect_analysis: ESP, HOMO/LUMO, Fukui, Hirshfeld, Mayer, CDFT
-  Phase 4 — 2D cross-sections: iqcap-2D_elect_figs on ELF/ESP/Fukui cubes
+  Phase 4 — 2D cross-sections: orca-2D_elect_figs on ELF/ESP/Fukui cubes
   Phase 5 — Paper generation + PDF compilation
 
 ### TYPE B: Dimer / Molecular Complex (TWO interacting molecules)
