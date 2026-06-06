@@ -130,15 +130,15 @@ def run_iqcap(module: str, args: str, workdir: str = None) -> str:
         workdir: Working directory
     """
     module_map = {
-        "opt": "iqcap-opt.sh",
-        "basic_elect_analysis": "iqcap-basic_elect_analysis.sh",
-        "elect_interaction": "iqcap-elect_interaction.sh",
-        "ts": "iqcap-ts.sh",
-        "G": "iqcap-G.sh",
-        "summary": "iqcap-summary.sh",
-        "report": "iqcap-report.sh",
-        "adsorption": "iqcap-adsorption_energy.sh",
-        "2d_figs": "iqcap-2D_elect_figs.sh",
+        "opt": "orca-opt.sh",
+        "basic_elect_analysis": "orca-basic_elect_analysis.sh",
+        "elect_interaction": "orca-elect_interaction.sh",
+        "ts": "orca-ts.sh",
+        "G": "orca-G.sh",
+        "summary": "orca-summary.sh",
+        "report": "orca-report.sh",
+        "adsorption": "orca-adsorption_energy.sh",
+        "2d_figs": "orca-2D_elect_figs.sh",
     }
 
     script = module_map.get(module)

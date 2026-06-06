@@ -45,7 +45,7 @@ Goal → Plan → Execute tool → Parse result → Decide → (retry|next|done)
 - **Tools**: `agent/orbis_tools.py` — 13 tools for ORCA/iQCAP/analysis
 - **Paper Generator**: `paper/generator.py` — LaTeX + Word + PDF generation
 - **Figures**: `paper/figures.py` — Auto-generated structure/IR/energy figures
-- **iQCAP Scripts**: `orca/iqcap-*.sh` — Automated Multiwfn+VMD analysis pipelines
+- **iQCAP Scripts**: `orca/orca-*.sh` — Automated Multiwfn+VMD analysis pipelines
 
 ## Author
 
