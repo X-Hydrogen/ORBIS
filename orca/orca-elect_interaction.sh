@@ -69,6 +69,7 @@ SP_LEVEL_CLI=0
 # Module switches
 RUN_NCI=1
 RUN_IGMH=1
+RUN_MIGM=1
 RUN_IRI=1
 RUN_HS=1
 RUN_CHGDIFF=1
@@ -84,6 +85,9 @@ MOL_ZOOM=1.00
 # IGMH parameters
 FRAG1_ATOMS=""
 FRAG2_ATOMS=""
+
+# mIGM parameters (geometry-only, no wavefunction needed)
+MIGM_GRID=0.2
 IGMH_ISO=0.01
 IGMH_COLOR_MIN=-0.04
 IGMH_COLOR_MAX=0.02
@@ -127,13 +131,18 @@ while [[ $# -gt 0 ]]; do
     --output-dir)     OUTPUT_DIR="$2";     shift 2 ;;
     --no-nci)         RUN_NCI=0;          shift 1 ;;
     --no-igmh)        RUN_IGMH=0;         shift 1 ;;
+    --no-migm)        RUN_MIGM=0;         shift 1 ;;
     --no-iri)         RUN_IRI=0;          shift 1 ;;
     --no-hs)          RUN_HS=0;           shift 1 ;;
     --no-chgdiff)     RUN_CHGDIFF=0;      shift 1 ;;
     --no-cda)         RUN_CDA=0;          shift 1 ;;
-    --only-CDA)       RUN_NCI=0 RUN_IGMH=0 RUN_IRI=0 RUN_HS=0 RUN_CHGDIFF=0 RUN_CDA=1; shift 1 ;;
-    --only-chgdiff)   RUN_NCI=0 RUN_IGMH=0 RUN_IRI=0 RUN_HS=0 RUN_CHGDIFF=1 RUN_CDA=0; shift 1 ;;
-    --only-hs)        RUN_NCI=0 RUN_IGMH=0 RUN_IRI=0 RUN_HS=1 RUN_CHGDIFF=0 RUN_CDA=0; shift 1 ;;
+    --only-NCI)       RUN_NCI=1 RUN_IGMH=0 RUN_MIGM=0 RUN_IRI=0 RUN_HS=0 RUN_CHGDIFF=0 RUN_CDA=0; shift 1 ;;
+    --only-IGMH)      RUN_NCI=0 RUN_IGMH=1 RUN_MIGM=0 RUN_IRI=0 RUN_HS=0 RUN_CHGDIFF=0 RUN_CDA=0; shift 1 ;;
+    --only-mIGM)      RUN_NCI=0 RUN_IGMH=0 RUN_MIGM=1 RUN_IRI=0 RUN_HS=0 RUN_CHGDIFF=0 RUN_CDA=0; shift 1 ;;
+    --only-IRI)       RUN_NCI=0 RUN_IGMH=0 RUN_MIGM=0 RUN_IRI=1 RUN_HS=0 RUN_CHGDIFF=0 RUN_CDA=0; shift 1 ;;
+    --only-HS)        RUN_NCI=0 RUN_IGMH=0 RUN_MIGM=0 RUN_IRI=0 RUN_HS=1 RUN_CHGDIFF=0 RUN_CDA=0; shift 1 ;;
+    --only-chgdiff)   RUN_NCI=0 RUN_IGMH=0 RUN_MIGM=0 RUN_IRI=0 RUN_HS=0 RUN_CHGDIFF=1 RUN_CDA=0; shift 1 ;;
+    --only-CDA)       RUN_NCI=0 RUN_IGMH=0 RUN_MIGM=0 RUN_IRI=0 RUN_HS=0 RUN_CHGDIFF=0 RUN_CDA=1; shift 1 ;;
     --skip-CDA)       RUN_CDA=0;          shift 1 ;;
     --skip-chgdiff)   RUN_CHGDIFF=0;      shift 1 ;;
     --skip-hs)        RUN_HS=0;           shift 1 ;;
@@ -166,6 +175,7 @@ while [[ $# -gt 0 ]]; do
     --cda-plot-margin) CDA_PLOT_MARGIN="$2";   shift 2 ;;
     --cda-total-charge) CDA_TOTAL_CHARGE="$2"; shift 2 ;;
     --cube-step)      CUBE_STEP="$2";     shift 2 ;;
+    --migm-grid)      MIGM_GRID="$2";     shift 2 ;;
     --mol-zoom)       MOL_ZOOM="$2";      shift 2 ;;
     --mo-zoom)        MO_ZOOM="$2";      shift 2 ;;
     --mo-zoom-frag)   MO_ZOOM_FRAG="$2";  shift 2 ;;
@@ -203,6 +213,7 @@ Output directory:
 Module switches:
   --no-nci             Skip NCI/RDG analysis
   --no-igmh            Skip IGMH analysis
+  --no-migm            Skip mIGM analysis (geometry-only, no wavefunction needed)
   --no-iri             Skip IRI analysis
   --no-hs              Skip Hirshfeld Surface analysis
   --no-chgdiff         Skip differential charge density
@@ -210,9 +221,13 @@ Module switches:
   --skip-CDA           Same as --no-cda
   --skip-chgdiff       Same as --no-chgdiff
   --skip-hs            Same as --no-hs
-  --only-CDA           Run only CDA (skip NCI, IGMH, IRI, HS, chgdiff)
-  --only-chgdiff       Run only chgdiff (skip NCI, IGMH, IRI, HS, CDA)
-  --only-hs            Run only HS (skip NCI, IGMH, IRI, chgdiff, CDA)
+  --only-NCI           Run only NCI (skip all others)
+  --only-IGMH          Run only IGMH
+  --only-mIGM          Run only mIGM (geometry-only, fastest)
+  --only-IRI           Run only IRI
+  --only-HS            Run only Hirshfeld Surface
+  --only-chgdiff       Run only chgdiff
+  --only-CDA           Run only CDA charge decomposition analysis
   --plot-only           Skip all computation; re-render/re-plot from existing data
 
 Fragment definition (required for IGMH, HS, chgdiff, CDA):
@@ -848,7 +863,7 @@ PYANN
 vmd_quality_preamble() {
   cat <<'TCLPRE'
 display projection   Orthographic
-display resize       2400 1800
+if {[display device] ne "text"} { display resize 2400 1800 }
 display shadows      off
 display ambientocclusion off
 display aoambient    0.70
@@ -1171,6 +1186,10 @@ quit
 EOF
   } > "$out_dir/render_igmh.tcl"
 
+  if [[ -z "${VMD_EXE:-}" ]]; then
+    echo "  WARNING: VMD not found, skipping IGMH/mIGM rendering." >&2
+    return 1
+  fi
   "$VMD_EXE" -dispdev text -e "$out_dir/render_igmh.tcl" > "$out_dir/igmh_render.out" 2>&1
 
   for v in front side top; do
@@ -1339,7 +1358,13 @@ if [[ "$PLOT_ONLY" -eq 0 ]]; then
 
   [[ -f "opt.xyz" ]] || { echo "opt.xyz not found. Run iqcap-opt.sh first." >&2; exit 1; }
   [[ -d "$DIR_N" ]] || { echo "Directory $DIR_N not found. Run iqcap-opt.sh first." >&2; exit 1; }
-  [[ -f "$DIR_N/TZVP.molden.input" ]] || { echo "$DIR_N/TZVP.molden.input not found. Run iqcap-basic_elect_analysis.sh or iqcap-opt.sh with orca_2aim/orca_2mkl." >&2; exit 1; }
+  [[ -f "$DIR_N/TZVP.molden.input" ]] || {
+    if [[ "$RUN_NCI" -eq 1 || "$RUN_IGMH" -eq 1 || "$RUN_IRI" -eq 1 || "$RUN_CHGDIFF" -eq 1 || "$RUN_CDA" -eq 1 ]]; then
+      echo "$DIR_N/TZVP.molden.input not found. Run iqcap-basic_elect_analysis.sh or iqcap-opt.sh with orca_2aim/orca_2mkl." >&2; exit 1
+    else
+      echo "  Note: $DIR_N/TZVP.molden.input not found, but no molden-dependent modules are enabled (mIGM/HS only need XYZ)."
+    fi
+  }
 
   MULTIWFN_EXE="$(resolve_bin_any "$MULTIWFN_BIN" "multiwfn" "Multiwfn" "Multiwfn_noGUI")" || {
     echo "Cannot find Multiwfn executable" >&2; exit 1
@@ -1361,7 +1386,7 @@ else
   fi
 fi
 
-if [[ "$RUN_NCI" -eq 1 || "$RUN_IGMH" -eq 1 || "$RUN_IRI" -eq 1 || "$RUN_HS" -eq 1 || "$RUN_CHGDIFF" -eq 1 || ( "$RUN_CDA" -eq 1 && "$CDA_PLOT" -eq 1 ) ]]; then
+if [[ "$RUN_NCI" -eq 1 || "$RUN_MIGM" -eq 1 || "$RUN_IGMH" -eq 1 || "$RUN_IRI" -eq 1 || "$RUN_HS" -eq 1 || "$RUN_CHGDIFF" -eq 1 || ( "$RUN_CDA" -eq 1 && "$CDA_PLOT" -eq 1 ) ]]; then
   VMD_EXE="$(resolve_bin_any "$VMD_BIN" "vmd" "VMD")" || { echo "Cannot find VMD executable" >&2; exit 1; }
   python3 -c "from PIL import Image" >/dev/null 2>&1 || {
     echo "ERROR: Python Pillow required. Install: pip install Pillow" >&2; exit 1
@@ -1416,6 +1441,7 @@ echo "  VMD:      ${VMD_EXE:-N/A}"
 [[ "$PLOT_ONLY" -eq 1 ]] && echo "  Mode:     PLOT-ONLY (skip computation, re-render only)"
 echo "  NCI:      $( [[ "$RUN_NCI" -eq 1 ]] && echo ON || echo OFF )"
 echo "  IGMH:     $( [[ "$RUN_IGMH" -eq 1 ]] && echo ON || echo OFF )"
+echo "  mIGM:     $( [[ "$RUN_MIGM" -eq 1 ]] && echo ON || echo OFF )"
 echo "  IRI:      $( [[ "$RUN_IRI" -eq 1 ]] && echo ON || echo OFF )"
 echo "  HS:       $( [[ "$RUN_HS" -eq 1 ]] && echo ON || echo OFF )"
 echo "  Chgdiff:  $( [[ "$RUN_CHGDIFF" -eq 1 ]] && echo ON || echo OFF )"
@@ -1520,6 +1546,64 @@ if [[ "$RUN_IGMH" -eq 1 ]]; then
     [[ -f output.txt ]] && render_igmh_scatter "$PWD"
   else
     echo "  WARNING: IGMH cubes not found. Cannot render."
+  fi
+
+  popd >/dev/null
+fi
+
+###############################################################################
+# Module 2.5: mIGM (geometry-only, no wavefunction needed)
+###############################################################################
+if [[ "$RUN_MIGM" -eq 1 ]]; then
+  echo ""
+  echo "[*] ===== mIGM Analysis (geometry-only) ====="
+
+  MIGM_DIR="$OUTPUT_DIR/mIGM"
+  mkdir -p "$MIGM_DIR"
+
+  pushd "$MIGM_DIR" >/dev/null
+
+  if [[ "$PLOT_ONLY" -eq 0 ]]; then
+    # mIGM only needs XYZ — no molden/wfn required
+    xyz_src=""
+    if [[ -f "$PROJECT_ROOT/optimization/opt.xyz" ]]; then
+      xyz_src="$PROJECT_ROOT/optimization/opt.xyz"
+    elif [[ -f "$PROJECT_ROOT/0.xyz" ]]; then
+      xyz_src="$PROJECT_ROOT/0.xyz"
+    else
+      # Search for any XYZ in project root
+      xyz_src=$(ls "$PROJECT_ROOT"/*.xyz 2>/dev/null | head -1)
+    fi
+    if [[ -z "$xyz_src" ]]; then
+      echo "  ERROR: No XYZ file found. mIGM requires a geometry file." >&2
+    else
+      # Build fragment definitions
+      # frag1 = user-specified atoms, frag2 = complementary (all others)
+      frag2_def="c"
+      if [[ -n "$FRAG2_ATOMS" ]]; then
+        frag2_def="$FRAG2_ATOMS"
+      fi
+
+      echo "  Input XYZ: $xyz_src"
+      echo "  mIGM: frag1=$FRAG1_ATOMS  frag2=$frag2_def  grid=$MIGM_GRID Bohr"
+      MIGM_INPUT="20\\n-10\\n2\\n${FRAG1_ATOMS}\\n${frag2_def}\\n4\\n${MIGM_GRID}\\n3\\n0\\n0\\nq"
+      echo -e "$MIGM_INPUT" | "$MULTIWFN_EXE" "$xyz_src" > migm.out 2>&1
+    fi
+  fi
+
+  if [[ -f sl2r.cub && -f dg_inter.cub ]]; then
+    echo "  mIGM cubes: sl2r.cub, dg_inter.cub"
+    echo "[*] Rendering mIGM three views..."
+    render_igmh_views "$PWD"
+    [[ -f output.txt ]] && { echo "[*] Generating mIGM scatter plot..."; render_igmh_scatter "$PWD"; }
+  elif [[ -f func1.cub && -f func2.cub ]]; then
+    ln -sf func1.cub sl2r.cub
+    ln -sf func2.cub dg_inter.cub
+    echo "  mIGM cubes (legacy names): func1.cub -> sl2r.cub, func2.cub -> dg_inter.cub"
+    render_igmh_views "$PWD"
+    [[ -f output.txt ]] && render_igmh_scatter "$PWD"
+  else
+    echo "  WARNING: mIGM cubes not found. Cannot render."
   fi
 
   popd >/dev/null
@@ -3231,6 +3315,7 @@ echo " $IQCAP_NAME v$IQCAP_VERSION -- Weak Interaction Analysis Complete"
 echo "========================================"
 echo "  Output: $PWD/$OUTPUT_DIR/"
 [[ "$RUN_NCI" -eq 1 ]] && echo "    NCI:     $OUTPUT_DIR/NCI/"
+[[ "$RUN_MIGM" -eq 1 ]] && echo "    mIGM:    $OUTPUT_DIR/mIGM/"
 [[ "$RUN_IGMH" -eq 1 ]] && echo "    IGMH:    $OUTPUT_DIR/IGMH/"
 [[ "$RUN_IRI" -eq 1 ]] && echo "    IRI:     $OUTPUT_DIR/IRI/"
 [[ "$RUN_HS" -eq 1 ]] && echo "    HS:      $OUTPUT_DIR/HS/"

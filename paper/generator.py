@@ -28,16 +28,10 @@ LATEX_PREAMBLE = r"""\documentclass[12pt,a4paper,titlepage]{article}
 \usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
 \usepackage[margin=2.5cm]{geometry}
 \usepackage{booktabs}
-\usepackage{siunitx}
-\usepackage[super,sort&compress,comma]{natbib}
 \usepackage{float}
 \usepackage{caption}
-\usepackage{subcaption}
-\usepackage{chemformula}
-\usepackage{mhchem}
 \usepackage{fancyhdr}
 \usepackage{setspace}
-\usepackage[version=4]{mhchem}
 
 % ── Style ──
 \onehalfspacing
@@ -129,8 +123,6 @@ def _sanitize_latex(text: str) -> str:
         "$": r"\$",
         "#": r"\#",
         "_": r"\_",
-        "{": r"\{",
-        "}": r"\}",
         "~": r"\textasciitilde{}",
         "^": r"\^{}",
         "Å": r"\AA{}",
@@ -142,6 +134,9 @@ def _sanitize_latex(text: str) -> str:
         "±": r"$\pm$",
         "×": r"$\times$",
     }
+    # NOTE: { and } are NOT escaped — they are essential for LaTeX
+    # commands like \section{...}, \begin{figure}, etc.
+    # The Agent must use \{ and \} for literal braces.
     for old, new in replacements.items():
         text = text.replace(old, new)
     return text
@@ -417,14 +412,22 @@ class PaperGenerator:
     def _compile_latex(self, tex_path: Path) -> Optional[Path]:
         """Compile LaTeX to PDF."""
         workdir = tex_path.parent
-        # Run twice for references
+        # Clean old auxiliary files that may cause write conflicts
+        for ext in ['.aux', '.log', '.out', '.toc', '.lof', '.lot']:
+            f = workdir / f"manuscript{ext}"
+            f.unlink(missing_ok=True)
+        # Run twice for references (without -output-directory; cwd handles it)
         for _ in range(2):
             result = subprocess.run(
-                ["pdflatex", "-interaction=nonstopmode",
-                 "-output-directory", str(workdir), tex_path.name],
+                ["pdflatex", "-interaction=nonstopmode", tex_path.name],
                 capture_output=True, text=True,
                 cwd=str(workdir), timeout=60
             )
+            if result.returncode != 0:
+                err = result.stderr + result.stdout
+                if "Error:" in err or "Fatal" in err:
+                    issues = [l.strip() for l in err.split('\n') if '!' in l or 'Error' in l or 'Fatal' in l]
+                    print(f"  ⚠️  pdflatex pass {_+1}: {issues[:1]}")
         pdf_path = workdir / "manuscript.pdf"
         if pdf_path.exists():
             return pdf_path

@@ -469,6 +469,27 @@ def generate_convergence_plot(
 
 # ── Batch Figure Generation ──────────────────────────────────────
 
+def _resolve_path(filepath: str) -> Path:
+    """Resolve a file path, trying multiple base directories.
+    
+    Handles the mismatch between orbis_tools (which writes relative paths 
+    under WORKSPACE) and direct Path usage.
+    """
+    p = Path(filepath)
+    if p.exists():
+        return p
+    # Try relative to workspace (where orbis_tools writes)
+    workspace = Path(__file__).resolve().parent.parent / "workspace"
+    p2 = workspace / filepath
+    if p2.exists():
+        return p2
+    # Try relative to orbis root
+    p3 = Path(__file__).resolve().parent.parent / filepath
+    if p3.exists():
+        return p3
+    return p  # Return original — let caller handle missing file
+
+
 def generate_all_figures(results: dict, fig_dir: str) -> list:
     """
     Generate all figures from Orbis results dict.
@@ -480,8 +501,9 @@ def generate_all_figures(results: dict, fig_dir: str) -> list:
 
     # 1. Structure figure
     if "optimized_xyz" in results:
+        xyz_path = _resolve_path(results["optimized_xyz"])
         code = generate_structure_figure(
-            results["optimized_xyz"],
+            str(xyz_path),
             str(fig_dir / "fig_structure.png"),
             title="Optimized Molecular Structure"
         )

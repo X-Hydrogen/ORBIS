@@ -86,18 +86,25 @@ def run_orca(inp_content: str, job_name: str = "calc", workdir: str = None) -> s
     result = _run(f"'{ORCA_BIN}' {job_name}.inp > {job_name}.out 2>&1", cwd=str(wd))
     elapsed = time.time() - start
 
-    output = result["stdout"]
     exit_code = result["exit_code"]
+
+    # Read the actual output file (stdout is empty due to shell redirection)
+    out_text = ""
+    if out_path.exists():
+        try:
+            out_text = out_path.read_text(encoding='utf-8', errors='replace')
+        except Exception:
+            out_text = ""
 
     # Check for normal termination
     converged = bool(re.search(
         r"ORCA TERMINATED NORMALLY|THE OPTIMIZATION HAS CONVERGED|OPTIMIZATION RUN DONE",
-        output
+        out_text
     ))
 
     # Extract final energy if available
     energy = None
-    m = re.search(r"FINAL SINGLE POINT ENERGY\s+([-\d.]+)", output)
+    m = re.search(r"FINAL SINGLE POINT ENERGY\s+([-\d.]+)", out_text)
     if m:
         energy = float(m.group(1))
 
@@ -112,7 +119,7 @@ def run_orca(inp_content: str, job_name: str = "calc", workdir: str = None) -> s
         converged=converged,
         energy=energy,
         files=files,
-        output_tail=output[-3000:],  # last 3000 chars
+        output_tail=out_text[-3000:],  # last 3000 chars
     )
 
 
@@ -132,6 +139,7 @@ def run_iqcap(module: str, args: str, workdir: str = None) -> str:
     module_map = {
         "opt": "orca-opt.sh",
         "basic_elect_analysis": "orca-basic_elect_analysis.sh",
+        "basic_elect_analysis_large": "orca-basic_elect_analysis-large_system.sh",
         "elect_interaction": "orca-elect_interaction.sh",
         "ts": "orca-ts.sh",
         "G": "orca-G.sh",
@@ -154,8 +162,8 @@ def run_iqcap(module: str, args: str, workdir: str = None) -> str:
     wd.mkdir(parents=True, exist_ok=True)
 
     # Auto-setup iQCAP prerequisites (optimization/ dir, opt.xyz, env file)
-    if module in ("basic_elect_analysis", "elect_interaction", "G", "ts",
-                  "adsorption", "2d_figs"):
+    if module in ("basic_elect_analysis", "basic_elect_analysis_large",
+                  "elect_interaction", "G", "ts", "adsorption", "2d_figs"):
         _auto_setup_iqcap_prereqs(wd)
 
     cmd = f"bash '{script_path}' {args}"
@@ -397,15 +405,12 @@ def _auto_setup_iqcap_prereqs(workdir: Path):
     opt_dir = workdir / "optimization"
     opt_dir.mkdir(parents=True, exist_ok=True)
 
-    # Find or create opt.xyz
+    # Find or create opt.xyz — search for ANY .xyz file in workdir
     opt_xyz = opt_dir / "opt.xyz"
     if not opt_xyz.exists():
-        # Try common locations
-        candidates = [
-            workdir / "opt.xyz",
-            workdir / "h2o_opt.xyz", 
-            workdir / "dimer_opt.xyz",
-        ]
+        # Priority: exact names first, then any .xyz file
+        candidates = [workdir / name for name in ("opt.xyz", "h2o_opt.xyz", "dimer_opt.xyz")]
+        candidates += sorted(workdir.glob("*.xyz"))  # fallback: any .xyz
         for c in candidates:
             if c.exists():
                 opt_xyz.write_text(c.read_text())
@@ -760,7 +765,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "run_iqcap",
-            "description": "Run an iQCAP workflow module. Available modules: opt, basic_elect_analysis, elect_interaction, ts, G, summary, report, adsorption, 2d_figs.",
+            "description": "Run an iQCAP workflow module. Modules: opt, basic_elect_analysis (≤100 atoms), basic_elect_analysis_large (>100 atoms, uses orca_plot), elect_interaction, ts, G, summary, report, adsorption, 2d_figs.",
             "parameters": {
                 "type": "object",
                 "properties": {
