@@ -136,11 +136,30 @@ Workflow:
   Mayer bond orders, CDFT indices, ELF/ESP/HOMO/LUMO cube files
   Output dir: electronic_structure/
 
+- **basic_elect_analysis_large** → args: "--xyz <file> --n-charge 0 --n-mult 1 --orca-plot-grid 0.25"
+  **For systems with >100 atoms.** Same outputs but uses ORCA's parallel orca_plot
+  instead of Multiwfn for cube generation — 50-200x faster. For large systems with
+  potential SCF convergence issues, pass --no-fukui-plot to skip ion-state ORCA
+  (N+1/N-1, Fukui panel, and CDFT all skipped together).
+  Output dir: electronic_structure/
+
 - **elect_interaction** → args: "--frag1-atoms '1-3' --frag2-atoms '4-6'"
-  Produces: NCI (3 views + scatter), IGMH (3 views + scatter), IRI (3 views + scatter),
+  Produces: NCI (3 views + scatter), mIGM (3 views + scatter, geometry-only,
+  no wavefunction needed), IGMH (3 views + scatter), IRI (3 views + scatter),
   Hirshfeld Surface (3 views + fingerprint), chgdiff (3 views), CDA (orbital
   interaction diagram + fragment MOs)
-  Output dir: electronic_structure/NCI/, IGMH/, IRI/, HS/, chgdiff/, CDA/
+  Output dir: electronic_structure/NCI/, mIGM/, IGMH/, IRI/, HS/, chgdiff/, CDA/
+  Note: mIGM is IGMH's faster variant — uses promolecular density from XYZ
+  only, no molden required. Ideal for large systems or quick preview.
+  Use --no-migm to disable, --migm-grid 0.2 to set grid spacing.
+
+- **amigm** → standalone script: `orca-amigm.sh --traj <multi-frame.xyz> --frag1 '1-N'`
+  Produces: time-averaged mIGM from MD trajectory (avgsl2r.cub + avgdg_inter.cub,
+  3 views + scatter). No QM output needed — only a multi-frame XYZ trajectory.
+  IMPORTANT: frag1 must be the FIXED/aligned fragment. Pre-align trajectory with
+  Multiwfn menu 100→22 first if needed.
+  Output dir: amIGM/
+  Ref: http://sobereva.com/759
 
 - **2d_figs** → args: "--cube <path> --plane-auto --output-name <name>
   --output-dir <dir> --type 2 --property <type>"

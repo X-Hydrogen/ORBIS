@@ -1,21 +1,33 @@
 #!/usr/bin/env bash
 ###############################################################################
 #  IQCAP - Intelligent Quantum Chemistry Analysis Platform
-#  Module: iqcap-basic_elect_analysis  (Basic Electronic Structure Analysis)
+#  Module: iqcap-basic_elect_analysis-large_system (Large-System Electronic Structure Analysis)
 #
-#  Version:    1.5.0
+#  Version:    1.6.0-large
 #  Author:     Hengyue Xu (ORCiD: 0000-0003-4438-9647)
-#  Date:       2026-03-02
+#  Date:       2026-06-10
 #  Copyright:  (C) 2024-2026 Hengyue Xu. All rights reserved.
 #
 #  Description:
-#    Electronic structure analysis module. Performs multi-charge-state
-#    single-point calculations, ESP mapping, frontier orbital analysis,
-#    Fukui reactivity descriptors, charge
+#    Large-system variant of the electronic structure analysis module.
+#    Replaces Multiwfn grid-based cube generation with ORCA's native
+#    orca_plot for density/ESP/MO cube files — dramatically faster for
+#    systems with >100 atoms. Keeps Multiwfn for fast tasks (Hirshfeld
+#    charges, Mayer bond orders, CDFT).
+#
+#    Performs multi-charge-state single-point calculations, ESP mapping,
+#    frontier orbital analysis, Fukui reactivity descriptors, charge
 #    population, and bond order evaluation.
 #
 #  Prerequisite:
 #    iqcap-opt.sh must have been run first. Requires optimization/ folder with opt.xyz.
+#
+#  Differences from iqcap-basic_elect_analysis.sh:
+#    - Uses orca_plot for cube generation (density, ESP, HOMO/LUMO, Fukui densities)
+#    - Keeps Multiwfn only for fast analyses (Hirshfeld charges, Mayer bond orders, CDFT)
+#    - Requires gbw + densitiesinfo files (copied from optimization/)
+#    - Higher default grid spacing (0.25 Bohr vs 0.15) for large systems
+#    - Supports --orca-plot-grid and --no-orca-plot flags
 #
 #  Disclaimer:
 #    This software is a workflow orchestration and analysis platform.
@@ -24,14 +36,14 @@
 #    independently under their respective licenses.
 #
 #  External dependencies (must be pre-installed):
-#    ORCA          -  Quantum chemistry engine (orca, orca_2aim, orca_2mkl)
-#    Multiwfn      -  Wavefunction analysis toolkit
+#    ORCA          -  Quantum chemistry engine (orca, orca_2aim, orca_2mkl, orca_plot)
+#    Multiwfn      -  Wavefunction analysis toolkit (fast tasks only: charges, bond orders, CDFT)
 #    VMD           -  Molecular visualization (TachyonInternal renderer)
 #    Python 3      -  With packages: numpy, Pillow, matplotlib
 #
 #  Usage:
-#    bash iqcap-basic_elect_analysis.sh [options]
-#    bash iqcap-basic_elect_analysis.sh --help
+#    bash iqcap-basic_elect_analysis-large_system.sh [options]
+#    bash iqcap-basic_elect_analysis-large_system.sh --help
 #
 ###############################################################################
 
@@ -39,8 +51,8 @@ set -euo pipefail
 
 IQCAP_NAME="IQCAP"
 IQCAP_FULLNAME="Intelligent Quantum Chemistry Analysis Platform"
-IQCAP_MODULE="iqcap-basic_elect_analysis"
-IQCAP_VERSION="1.5.0"
+IQCAP_MODULE="iqcap-basic_elect_analysis-large_system"
+IQCAP_VERSION="1.6.0-large"
 IQCAP_AUTHOR="Hengyue Xu (ORCiD: 0000-0003-4438-9647)"
 IQCAP_COPYRIGHT="(C) 2024-2026 Hengyue Xu. All rights reserved."
 
@@ -50,6 +62,7 @@ IQCAP_COPYRIGHT="(C) 2024-2026 Hengyue Xu. All rights reserved."
 ORCA_BIN=""
 ORCA_2AIM_BIN=""
 ORCA_2MKL_BIN=""
+ORCA_PLOT_BIN=""
 MULTIWFN_BIN=""
 VMD_BIN=""
 
@@ -121,6 +134,7 @@ NM1_MULT=""
 
 RUN_MULTIWFN=1
 RUN_CDFT=1
+RUN_ORCA_PLOT=1
 RUN_ESP_PLOT=1
 RUN_HOMO_LUMO_PLOT=1
 RUN_FUKUI_PLOT=1
@@ -136,6 +150,7 @@ MOL_ZOOM=1.00 #0.70
 MO_ISO=0.03
 FUKUI_ISO=0.003
 CUBE_STEP=0.15
+ORCA_PLOT_GRID=0.25
 PLOT_ONLY=0
 ELEMENT_COLOR_OVERRIDES=()
 
@@ -160,7 +175,7 @@ while [[ $# -gt 0 ]]; do
     --no-esp-plot) RUN_ESP_PLOT=0; shift 1 ;;
     --no-mol-view) RUN_MOL_VIEW=0; shift 1 ;;
     --no-homo-lumo-plot) RUN_HOMO_LUMO_PLOT=0; shift 1 ;;
-    --no-fukui-plot) RUN_FUKUI_PLOT=0; shift 1 ;;
+    --no-fukui-plot) RUN_FUKUI_PLOT=0; RUN_CDFT=0; shift 1 ;;
     --no-charges) RUN_CHARGES=0; shift 1 ;;
     --no-bondorder) RUN_BONDORDER=0; shift 1 ;;
     --plot-only) PLOT_ONLY=1; shift 1 ;;
@@ -172,6 +187,9 @@ while [[ $# -gt 0 ]]; do
     --mo-iso) MO_ISO="$2"; shift 2 ;;
     --fukui-iso) FUKUI_ISO="$2"; shift 2 ;;
     --cube-step) CUBE_STEP="$2"; shift 2 ;;
+    --orca-plot-grid) ORCA_PLOT_GRID="$2"; shift 2 ;;
+    --orca-plot) RUN_ORCA_PLOT=1; shift 1 ;;
+    --no-orca-plot) RUN_ORCA_PLOT=0; shift 1 ;;
     --element-color) ELEMENT_COLOR_OVERRIDES+=("$2"); shift 2 ;;
     -V|--version)
       echo "$IQCAP_NAME v$IQCAP_VERSION -- $IQCAP_FULLNAME"
@@ -213,7 +231,7 @@ Module switches:
   --no-esp-plot       Skip ESP three-view rendering
   --no-mol-view       Skip pure molecule three-view rendering
   --no-homo-lumo-plot Skip HOMO/LUMO panel rendering
-  --no-fukui-plot     Skip Fukui 2x2 panel rendering
+  --no-fukui-plot     Skip Fukui + ion-state ORCA + CDFT (large systems)
   --no-charges        Skip Hirshfeld charge analysis
   --no-bondorder      Skip Mayer bond order analysis
   --plot-only          Skip all computation; re-render from existing data
@@ -226,7 +244,10 @@ Visualization parameters:
   --mol-zoom FLOAT    VMD zoom factor for molecule views (default: 1.00)
   --mo-iso FLOAT      Orbital isovalue for HOMO/LUMO (default: 0.03)
   --fukui-iso FLOAT   Fukui function isovalue (default: 0.003)
-  --cube-step FLOAT   Cube file grid spacing in Bohr (default: 0.15)
+  --cube-step FLOAT   Cube file grid spacing in Bohr (default: 0.15, Multiwfn)
+  --orca-plot-grid FLOAT  ORCA plot grid spacing in Bohr (default: 0.25, orca_plot)
+  --orca-plot         Use orca_plot for cube generation (default: on for large-system)
+  --no-orca-plot      Use Multiwfn for all cube generation (fallback to original behavior)
   --element-color SPEC Override element color (repeatable). SPEC formats:
                       "Na=#1f77b4" or "S=#ffcc00" or "Na=0.12/0.34/0.56" (RGB 0..1)
                       Multiple entries can be separated by ',' or ';'
@@ -445,6 +466,178 @@ find_esp_cubes() {
   [[ -n "$esp_cube" ]] || { [[ "${#cube_files[@]}" -ge 2 ]] && esp_cube="${cube_files[1]}"; }
   [[ -n "$esp_cube" ]] || { echo "Cannot determine ESP cube." >&2; return 1; }
   echo "$density_cube|$esp_cube"
+}
+
+###############################################################################
+# Helpers: orca_plot cube generation (replaces Multiwfn for large systems)
+###############################################################################
+
+# Usage: orca_plot_gen_density <gbw_file> <out_cube> <grid_spacing> [log_file]
+# Generates electron density cube using ORCA's native orca_plot.
+# Requires: gbw_file + <basename>.densitiesinfo in same directory.
+orca_plot_gen_density() {
+  local gbw="$1" out_cube="$2" grid="$3" log_file="${4:-/dev/null}"
+  local gbw_dir; gbw_dir="$(dirname "$(realpath "$gbw")")"
+  local gbw_name; gbw_name="$(basename "$gbw" .gbw)"
+  local plot_input; plot_input="$(mktemp /tmp/orca_plot_density_XXXXXX.in)"
+  # Compute grid dimensions from bounding box (extracted from orca_plot output)
+  {
+    echo "1"        # enter plot type
+    echo "2"        # electron density
+    echo "y"        # confirm default density file
+    echo "4"        # set grid
+    echo "200 200 200"   # ~0.25 Bohr spacing for 50 Bohr span
+    echo "11"       # generate
+    echo "12"       # exit
+  } > "$plot_input"
+  pushd "$gbw_dir" >/dev/null
+  "$ORCA_PLOT_EXE" "$gbw_name.gbw" -i < "$plot_input" > "$log_file" 2>&1
+  popd >/dev/null
+  # Find generated cube file and rename
+  local gen_cube
+  gen_cube="$(ls -t "$gbw_dir"/*.cube 2>/dev/null | head -1)" || true
+  if [[ -n "$gen_cube" && -f "$gen_cube" ]]; then
+    mv "$gen_cube" "$out_cube"
+    echo "  orca_plot density cube -> $out_cube"
+  else
+    echo "ERROR: orca_plot density cube generation failed for $gbw" >&2
+    rm -f "$plot_input"
+    return 1
+  fi
+  rm -f "$plot_input"
+  return 0
+}
+
+# Usage: orca_plot_gen_esp <gbw_file> <out_cube> <grid_spacing> [log_file]
+# Generates electrostatic potential cube using ORCA's native orca_plot.
+orca_plot_gen_esp() {
+  local gbw="$1" out_cube="$2" grid="$3" log_file="${4:-/dev/null}"
+  local gbw_dir; gbw_dir="$(dirname "$(realpath "$gbw")")"
+  local gbw_name; gbw_name="$(basename "$gbw" .gbw)"
+  local plot_input; plot_input="$(mktemp /tmp/orca_plot_esp_XXXXXX.in)"
+  {
+    echo "1"        # enter plot type
+    echo "43"       # electrostatic potential
+    echo "sp.scfp"  # density name for SCF density (NOT "y" — ESP asks for state density name)
+    echo "4"        # set grid
+    echo "200 200 200"   # ~0.25 Bohr spacing
+    echo "11"       # generate
+    echo "12"       # exit
+  } > "$plot_input"
+  pushd "$gbw_dir" >/dev/null
+  "$ORCA_PLOT_EXE" "$gbw_name.gbw" -i < "$plot_input" > "$log_file" 2>&1
+  popd >/dev/null
+  local gen_cube
+  gen_cube="$(ls -t "$gbw_dir"/*.cube 2>/dev/null | head -1)" || true
+  if [[ -n "$gen_cube" && -f "$gen_cube" ]]; then
+    mv "$gen_cube" "$out_cube"
+    echo "  orca_plot ESP cube -> $out_cube"
+  else
+    echo "ERROR: orca_plot ESP cube generation failed for $gbw" >&2
+    rm -f "$plot_input"
+    return 1
+  fi
+  rm -f "$plot_input"
+  return 0
+}
+
+# Usage: orca_plot_gen_mo <gbw_file> <mo_index> <out_cube> <grid_spacing> [log_file]
+# Generates molecular orbital cube. mo_index=0 plots all MOs (use HOMO/LUMO indices).
+orca_plot_gen_mo() {
+  local gbw="$1" mo_idx="$2" out_cube="$3" grid="$4" log_file="${5:-/dev/null}"
+  local gbw_dir; gbw_dir="$(dirname "$(realpath "$gbw")")"
+  local gbw_name; gbw_name="$(basename "$gbw" .gbw)"
+  local plot_input; plot_input="$(mktemp /tmp/orca_plot_mo_XXXXXX.in)"
+  {
+    echo "1"        # enter plot type
+    echo "1"        # molecular orbitals
+    echo "2"        # enter orbital number
+    echo "$mo_idx"  # MO index
+    echo "4"        # set grid
+    echo "200 200 200"   # ~0.25 Bohr spacing
+    echo "11"       # generate
+    echo "12"       # exit
+  } > "$plot_input"
+  pushd "$gbw_dir" >/dev/null
+  "$ORCA_PLOT_EXE" "$gbw_name.gbw" -i < "$plot_input" > "$log_file" 2>&1
+  popd >/dev/null
+  local gen_cube
+  gen_cube="$(ls -t "$gbw_dir"/*.cube 2>/dev/null | head -1)" || true
+  if [[ -n "$gen_cube" && -f "$gen_cube" ]]; then
+    mv "$gen_cube" "$out_cube"
+    echo "  orca_plot MO[$mo_idx] cube -> $out_cube"
+  else
+    echo "ERROR: orca_plot MO cube generation failed for $gbw MO=$mo_idx" >&2
+    rm -f "$plot_input"
+    return 1
+  fi
+  rm -f "$plot_input"
+  return 0
+}
+
+# Usage: orca_plot_get_grid_dims <gbw_file> <spacing>
+# Prints "nx ny nz" computed from molecular bounding box.
+# Uses ORCA's own boundary extraction via orca_plot.
+orca_plot_get_grid_dims() {
+  local gbw="$1" spacing="${2:-0.25}"
+  local gbw_dir; gbw_dir="$(dirname "$(realpath "$gbw")")"
+  local gbw_name; gbw_name="$(basename "$gbw" .gbw)"
+  local banner
+  pushd "$gbw_dir" >/dev/null
+  banner="$(echo "12" | "$ORCA_PLOT_EXE" "$gbw_name.gbw" -i 2>&1 || true)"
+  popd >/dev/null
+  # Parse boundaries from banner (join multi-line output, then extract 6 boundary values)
+  local x0 x1 y0 y1 z0 z1
+  read -r x0 x1 y0 y1 z0 z1 < <(echo "$banner" | tr '\n' ' ' | awk '{
+      gsub(/\([^)]*\)/, "")
+      for(i=1;i<=NF;i++) {
+        if($i=="Boundaries" && NF>=i+7) {
+          print $(i+2), $(i+3), $(i+4), $(i+5), $(i+6), $(i+7)
+          exit
+        }
+      }
+    }' 2>/dev/null)
+  # Fallback if parsing fails
+  if [[ -z "$x0" ]]; then
+    echo "80 80 80"
+    return 0
+  fi
+  local span_x span_y span_z
+  span_x="$(python3 -c "print(int(abs($x1 - $x0) / $spacing) + 3)")"
+  span_y="$(python3 -c "print(int(abs($y1 - $y0) / $spacing) + 3)")"
+  span_z="$(python3 -c "print(int(abs($z1 - $z0) / $spacing) + 3)")"
+  # Clamp to reasonable range
+  (( span_x > 300 )) && span_x=300; (( span_y > 300 )) && span_y=300; (( span_z > 300 )) && span_z=300
+  (( span_x < 40  )) && span_x=40;  (( span_y < 40  )) && span_y=40;  (( span_z < 40  )) && span_z=40
+  echo "$span_x $span_y $span_z"
+}
+
+# Parse HOMO/LUMO indices from molden file. Prints "homo_idx lumo_idx".
+orca_plot_find_homo_lumo() {
+  local molden="$1"
+  python3 - "$molden" <<'PYHL'
+import sys, re
+text = open(sys.argv[1], encoding='utf-8', errors='ignore').read()
+in_mo = False
+enes, occs = [], []
+for ln in text.splitlines():
+    ln = ln.strip()
+    if ln == "[MO]":
+        in_mo = True
+        continue
+    if in_mo:
+        if ln.startswith("Ene="):
+            enes.append(float(re.search(r'Ene=\s*([-\d.Ee+]+)', ln).group(1)))
+        elif ln.startswith("Occup="):
+            occs.append(float(re.search(r'Occup=\s*([\d.]+)', ln).group(1)))
+homo_i = None
+for i, o in enumerate(occs):
+    if o > 0.5:
+        homo_i = i
+if homo_i is None or homo_i + 1 >= len(enes):
+    sys.exit(1)
+print(homo_i + 1, homo_i + 2)  # 1-indexed MO numbers
+PYHL
 }
 
 find_density_cube() {
@@ -1164,12 +1357,12 @@ EOF
 ###############################################################################
 render_homo_lumo_panel() {
   local out_dir="$1"
-  [[ -f "$out_dir/HOMO.cub" && -f "$out_dir/LUMO.cub" ]] || {
+  [[ -f "$out_dir/HOMO.cube" && -f "$out_dir/LUMO.cube" ]] || {
     echo "Missing HOMO/LUMO cube files, skipping." >&2; return 1
   }
 
-  render_signed_iso_three_views "$out_dir/HOMO.cub" "$out_dir/homo_view" "$MO_ISO" "homo" "mo"
-  render_signed_iso_three_views "$out_dir/LUMO.cub" "$out_dir/lumo_view" "$MO_ISO" "lumo" "mo"
+  render_signed_iso_three_views "$out_dir/HOMO.cube" "$out_dir/homo_view" "$MO_ISO" "homo" "mo"
+  render_signed_iso_three_views "$out_dir/LUMO.cube" "$out_dir/lumo_view" "$MO_ISO" "lumo" "mo"
 
   python3 - "$out_dir" "$MO_ISO" <<'PYMO'
 import sys
@@ -1468,7 +1661,14 @@ if [[ "$PLOT_ONLY" -eq 0 ]]; then
   ORCA_EXE="$(resolve_bin_any "$ORCA_BIN" "orca")" || { echo "Cannot find ORCA executable (tried: orca)" >&2; exit 1; }
   ORCA_2AIM_EXE="$(resolve_bin_any "$ORCA_2AIM_BIN" "orca_2aim")" || { echo "Cannot find ORCA_2AIM executable (tried: orca_2aim)" >&2; exit 1; }
   ORCA_2MKL_EXE="$(resolve_bin_any "$ORCA_2MKL_BIN" "orca_2mkl")" || { echo "Cannot find ORCA_2MKL executable (tried: orca_2mkl)" >&2; exit 1; }
-  [[ "$RUN_MULTIWFN" -eq 1 || "$RUN_CDFT" -eq 1 ]] && {
+  if [[ "$RUN_ORCA_PLOT" -eq 1 ]]; then
+    ORCA_PLOT_EXE="$(resolve_bin_any "$ORCA_PLOT_BIN" "orca_plot")" || {
+      echo "Cannot find orca_plot executable (tried: orca_plot)" >&2
+      echo "  Falling back to Multiwfn for cube generation." >&2
+      RUN_ORCA_PLOT=0
+    }
+  fi
+  [[ "$RUN_MULTIWFN" -eq 1 || "$RUN_CDFT" -eq 1 || "$RUN_ORCA_PLOT" -eq 0 ]] && {
     MULTIWFN_EXE="$(resolve_bin_any "$MULTIWFN_BIN" "multiwfn" "Multiwfn" "Multiwfn_noGUI")" || {
       echo "Cannot find Multiwfn executable (tried: multiwfn, Multiwfn, Multiwfn_noGUI)" >&2
       exit 1
@@ -1501,7 +1701,10 @@ echo "========================================"
   echo "  SP level:  $SP_LEVEL"
   echo "  orca_2aim: $ORCA_2AIM_EXE"
   echo "  orca_2mkl: $ORCA_2MKL_EXE"
-  [[ "$RUN_MULTIWFN" -eq 1 || "$RUN_CDFT" -eq 1 ]] && echo "  Multiwfn:  $MULTIWFN_EXE"
+  if [[ "$RUN_ORCA_PLOT" -eq 1 ]]; then
+    echo "  orca_plot: $ORCA_PLOT_EXE  (grid=${ORCA_PLOT_GRID} Bohr)"
+  fi
+  [[ "$RUN_MULTIWFN" -eq 1 || "$RUN_CDFT" -eq 1 || "$RUN_ORCA_PLOT" -eq 0 ]] && echo "  Multiwfn:  $MULTIWFN_EXE"
 }
 [[ "$RUN_ESP_PLOT" -eq 1 || "$RUN_MOL_VIEW" -eq 1 || "$RUN_HOMO_LUMO_PLOT" -eq 1 || "$RUN_FUKUI_PLOT" -eq 1 ]] && echo "  VMD:       $VMD_EXE"
 echo "  Working:   $PWD"
@@ -1535,17 +1738,103 @@ if [[ "$PLOT_ONLY" -eq 0 ]]; then
     cp optimization/TZVP.molden.input "$DIR_N/"
     cp optimization/TZVP.wfn "$DIR_N/"
     cp "$OPT_XYZ" "$DIR_N/geom.xyz"
+    # Copy gbw + densitiesinfo for orca_plot (MUST keep original basename - gbw internally references sp.*)
+    if [[ "$RUN_ORCA_PLOT" -eq 1 ]]; then
+      if [[ -f "optimization/sp.gbw" ]]; then
+        cp optimization/sp.gbw "$DIR_N/sp.gbw"
+        cp optimization/sp.densitiesinfo "$DIR_N/sp.densitiesinfo" 2>/dev/null || true
+        cp optimization/sp.densities "$DIR_N/sp.densities" 2>/dev/null || true
+      elif [[ -f "optimization/opt.gbw" ]]; then
+        cp optimization/opt.gbw "$DIR_N/opt.gbw"
+        cp optimization/opt.densitiesinfo "$DIR_N/opt.densitiesinfo" 2>/dev/null || true
+        cp optimization/opt.densities "$DIR_N/opt.densities" 2>/dev/null || true
+      else
+        echo "  WARNING: No gbw file found for orca_plot. Cube generation may fail." >&2
+      fi
+    fi
   else
     run_orca_case "$DIR_N"   "TZVP"   "$N_CHARGE"   "$N_MULT"   "$OPT_XYZ" 1
   fi
-  run_orca_case "$DIR_NP1" "TZVP+1" "$NP1_CHARGE" "$NP1_MULT" "$OPT_XYZ" 0
-  run_orca_case "$DIR_NM1" "TZVP-1" "$NM1_CHARGE" "$NM1_MULT" "$OPT_XYZ" 0
+  # Only run ion-state calculations if Fukui or CDFT are enabled
+  if [[ "$RUN_FUKUI_PLOT" -eq 1 || "$RUN_CDFT" -eq 1 ]]; then
+    run_orca_case "$DIR_NP1" "TZVP+1" "$NP1_CHARGE" "$NP1_MULT" "$OPT_XYZ" 0
+    run_orca_case "$DIR_NM1" "TZVP-1" "$NM1_CHARGE" "$NM1_MULT" "$OPT_XYZ" 0
+  else
+    echo "[*] Skipping ion-state calculations (Fukui and CDFT disabled)"
+  fi
 fi
 
 ###############################################################################
-# 3) Multiwfn analyses + visualizations
+# 3) Cube generation + Multiwfn analyses + visualizations
 ###############################################################################
-if [[ "$RUN_MULTIWFN" -eq 1 && "$PLOT_ONLY" -eq 0 ]]; then
+if [[ "$RUN_ORCA_PLOT" -eq 1 && "$PLOT_ONLY" -eq 0 ]]; then
+  # -------- orca_plot path: fast cube generation --------
+  pushd "$DIR_N" >/dev/null
+  echo "[*] Generating cubes via orca_plot (grid=${ORCA_PLOT_GRID} Bohr)..."
+
+  # ESP cube
+  echo "[*]   ESP cube..."
+  orca_plot_gen_esp "sp.gbw" "TZVP_esp.cube" "$ORCA_PLOT_GRID" "out_orca_esp.txt"
+
+  # Electron density cube
+  echo "[*]   Density cube..."
+  orca_plot_gen_density "sp.gbw" "TZVP_density.cube" "$ORCA_PLOT_GRID" "out_orca_density.txt"
+
+  # HOMO/LUMO cubes
+  echo "[*]   HOMO/LUMO cubes..."
+  homo_idx=0; lumo_idx=0
+  read -r homo_idx lumo_idx < <(orca_plot_find_homo_lumo "TZVP.molden.input" 2>/dev/null) || true
+  if [[ "$homo_idx" -gt 0 ]]; then
+    orca_plot_gen_mo "sp.gbw" "$homo_idx" "HOMO.cube" "$ORCA_PLOT_GRID" "out_orca_homo.txt"
+    orca_plot_gen_mo "sp.gbw" "$lumo_idx" "LUMO.cube" "$ORCA_PLOT_GRID" "out_orca_lumo.txt"
+  else
+    echo "  WARNING: Could not determine HOMO/LUMO. Skipping MO cubes."
+  fi
+
+  # ESP rendering (needs density + ESP cubes)
+  if [[ "$RUN_ESP_PLOT" -eq 1 ]]; then
+    echo "[*] Rendering ESP three views..."
+    mkdir -p "../esp"
+    cp TZVP_density.cube TZVP_esp.cube "../esp/"
+    pushd "../esp" >/dev/null
+    render_esp_three_views "$PWD"
+    popd >/dev/null
+  fi
+
+  # HOMO/LUMO rendering
+  if [[ "$RUN_HOMO_LUMO_PLOT" -eq 1 ]]; then
+    if [[ -f "HOMO.cube" && -f "LUMO.cube" ]]; then
+      echo "[*] Rendering HOMO/LUMO panel..."
+      mkdir -p "../homo_lumo"
+      cp HOMO.cube LUMO.cube TZVP.molden.input "../homo_lumo/" 2>/dev/null || true
+      pushd "../homo_lumo" >/dev/null
+      render_homo_lumo_panel "$PWD"
+      popd >/dev/null
+    else
+      echo "  WARNING: HOMO/LUMO cubes not available. Skipping HOMO/LUMO panel."
+    fi
+  fi
+
+  popd >/dev/null
+
+  # Hirshfeld charges + Mayer bond orders (still via Multiwfn — fast, no cube needed)
+  if [[ "$RUN_CHARGES" -eq 1 || "$RUN_BONDORDER" -eq 1 ]]; then
+    pushd "$DIR_N" >/dev/null
+    if [[ "$RUN_CHARGES" -eq 1 ]]; then
+      echo "[*] Computing Hirshfeld charges (Multiwfn)..."
+      echo -e "7\n1\n1\ny\n0\nq" | "$MULTIWFN_EXE" TZVP.molden.input > hirshfeld_charges.txt
+      echo "  Hirshfeld charges -> $PWD/hirshfeld_charges.txt"
+    fi
+    if [[ "$RUN_BONDORDER" -eq 1 ]]; then
+      echo "[*] Computing Mayer bond orders (Multiwfn)..."
+      echo -e "9\n1\ny\n0\nq" | "$MULTIWFN_EXE" TZVP.molden.input > mayer_bondorder.txt
+      echo "  Mayer bond orders -> $PWD/mayer_bondorder.txt"
+    fi
+    popd >/dev/null
+  fi
+
+elif [[ "$RUN_MULTIWFN" -eq 1 && "$PLOT_ONLY" -eq 0 ]]; then
+  # -------- Multiwfn path: original behavior (fallback) --------
   pushd "$DIR_N" >/dev/null
   echo -e "5\n12\n4\n$CUBE_STEP\n\n2\n0\nq" | "$MULTIWFN_EXE" TZVP.molden.input > outesp.txt
   echo -e "5\n1\n4\n$CUBE_STEP\n\n2\n0\nq"  | "$MULTIWFN_EXE" TZVP.molden.input > outchg.txt
@@ -1621,7 +1910,28 @@ fi
 ###############################################################################
 if [[ "$RUN_FUKUI_PLOT" -eq 1 ]]; then
   FUKUI_DIR="$ELEC_STRUCT/Fukui"
-  if [[ "$PLOT_ONLY" -eq 0 && "$RUN_MULTIWFN" -eq 1 ]]; then
+  if [[ "$PLOT_ONLY" -eq 0 && "$RUN_ORCA_PLOT" -eq 1 ]]; then
+    echo "[*] Generating Fukui density cubes via orca_plot..."
+    pushd "$DIR_N" >/dev/null
+    orca_plot_gen_density "TZVP.gbw" "density_n_fukui.cube" "$ORCA_PLOT_GRID" "out_density_fukui_n.txt"
+    popd >/dev/null
+
+    pushd "$DIR_NP1" >/dev/null
+    orca_plot_gen_density "TZVP+1.gbw" "density_np1_fukui.cube" "$ORCA_PLOT_GRID" "out_density_fukui_np1.txt"
+    popd >/dev/null
+
+    pushd "$DIR_NM1" >/dev/null
+    orca_plot_gen_density "TZVP-1.gbw" "density_nm1_fukui.cube" "$ORCA_PLOT_GRID" "out_density_fukui_nm1.txt"
+    popd >/dev/null
+
+    mkdir -p "$FUKUI_DIR"
+    generate_fukui_cubes \
+      "${DIR_N}/density_n_fukui.cube" \
+      "${DIR_NP1}/density_np1_fukui.cube" \
+      "${DIR_NM1}/density_nm1_fukui.cube" \
+      "$FUKUI_DIR"
+    render_fukui_panel "$FUKUI_DIR"
+  elif [[ "$PLOT_ONLY" -eq 0 && "$RUN_MULTIWFN" -eq 1 ]]; then
     echo "[*] Generating Fukui cubes and panel..."
     pushd "$DIR_N" >/dev/null
     export_density_cube_for_fukui "TZVP.molden.input" "density_n_fukui.cub" "out_density_fukui_n.txt"
