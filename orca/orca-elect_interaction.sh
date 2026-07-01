@@ -85,6 +85,10 @@ MOL_ZOOM=1.00
 # IGMH parameters
 FRAG1_ATOMS=""
 FRAG2_ATOMS=""
+IGMH_GRID=0.15
+IGMH_VDW_SCL=2.0
+IGMH_SCATTER_MODE="both"    # "inter", "intra", or "both"
+IGMH_SCATTER_YSCALE="log"   # "log" or "linear"
 
 # mIGM parameters (geometry-only, no wavefunction needed)
 MIGM_GRID=0.2
@@ -161,6 +165,10 @@ while [[ $# -gt 0 ]]; do
     --igmh-iso)       IGMH_ISO="$2";      shift 2 ;;
     --igmh-color-min) IGMH_COLOR_MIN="$2"; shift 2 ;;
     --igmh-color-max) IGMH_COLOR_MAX="$2"; shift 2 ;;
+    --igmh-grid)      IGMH_GRID="$2";      shift 2 ;;
+    --igmh-vdw-scl)   IGMH_VDW_SCL="$2";   shift 2 ;;
+    --igmh-scatter)   IGMH_SCATTER_MODE="$2"; shift 2 ;;
+    --igmh-yscale)    IGMH_SCATTER_YSCALE="$2"; shift 2 ;;
     --iri-iso)        IRI_ISO="$2";       shift 2 ;;
     --hs-color-min)   HS_COLOR_MIN="$2";  shift 2 ;;
     --hs-color-max)   HS_COLOR_MAX="$2";  shift 2 ;;
@@ -247,6 +255,10 @@ IGMH parameters:
   --igmh-iso FLOAT     delta-g_inter isosurface value (default: 0.01)
   --igmh-color-min F   sign(lambda2)*rho color min (default: -0.04)
   --igmh-color-max F   sign(lambda2)*rho color max (default: 0.02)
+  --igmh-grid FLOAT    grid spacing in Bohr (default: 0.15)
+  --igmh-vdw-scl FLOAT IGMvdwscl acceleration factor (default: 2.0, 0=off)
+  --igmh-scatter MODE  scatter channels: inter, intra, both (default: both)
+  --igmh-yscale MODE   y-axis scale: log or linear (default: log)
 
 IRI parameters:
   --iri-iso FLOAT      IRI isosurface value (default: 1.0)
@@ -1165,6 +1177,18 @@ material change opacity Transparent 0.75
 mol material Transparent
 mol addrep top
 
+# If atmdg.pdb exists, color atoms by δG_atom contribution
+set atmpdb [file join [file dirname [molinfo top get filename]] "atmdg.pdb"]
+if {[file exists \$atmpdb]} {
+  mol new \$atmpdb type pdb waitfor all
+  mol representation CPK 0.8 0.3 30.0 30.0
+  mol color Occupancy
+  mol selection all
+  mol material Glossy
+  mol addrep top
+  mol scaleminmax top 0 0.0 50.0
+}
+
 color scale method BGR
 mol scaleminmax top 1 $IGMH_COLOR_MIN $IGMH_COLOR_MAX
 
@@ -1264,9 +1288,9 @@ for view in ("front", "side", "top"):
         bb = draw.textbbox((0,0), f"{igmh_min:.3f}", font=fv)
         draw.text((x1+16, y1-(bb[3]-bb[1])+2), f"{igmh_min:.3f}", fill=(28,28,28,255), font=fv)
         uf = _font(False, max(19, int(0.015*w)))
-        draw.text((x1+20, y1+(bb[3]-bb[1])+8), "sign(\u03bb\u2082)\u03c1", fill=(85,85,85,255), font=uf)
+        draw.text((x1+20, y1+(bb[3]-bb[1])+8), "sign(\\u03bb\\u2082)\\u03c1", fill=(85,85,85,255), font=uf)
 
-        footer = (f"IGMH  \u03b4g_inter iso = {igmh_iso:.4g}      "
+        footer = (f"IGMH  \\u03b4g_inter iso = {igmh_iso:.4g}      "
                   "blue = attractive      green = vdW      red = repulsive")
         fb = draw.textbbox((0,0), footer, font=fn)
         draw.text(((canvas.width-(fb[2]-fb[0]))/2, h+(footer_h-(fb[3]-fb[1]))/2),
@@ -1278,10 +1302,23 @@ PYIGMH
 
 render_igmh_scatter() {
   local out_dir="$1"
+  local scatter_mode="${2:-both}"   # inter, intra, both
+  local yscale="${3:-log}"          # log or linear
   local scatter_data="$out_dir/output.txt"
   [[ -f "$scatter_data" ]] || { echo "No IGMH scatter data (output.txt), skipping." >&2; return 1; }
 
-  python3 - "$scatter_data" "$out_dir/igmh_scatter.png" <<'PYSCT'
+  # Build list of (mode, scale, suffix) to generate.
+  # "both" default → all three variants; specific mode → single variant.
+  local specs=""
+  if [[ "$scatter_mode" == "both" ]]; then
+    specs="both:log:both_log inter:log:inter_log both:linear:both_linear"
+  elif [[ "$scatter_mode" == "inter" ]]; then
+    specs="inter:${yscale}:inter_${yscale}"
+  else
+    specs="intra:${yscale}:intra_${yscale}"
+  fi
+
+  python3 - "$scatter_data" "$out_dir" "$specs" <<'PYSCT'
 import sys
 import numpy as np
 import matplotlib
@@ -1292,55 +1329,123 @@ from matplotlib.colors import LinearSegmentedColormap
 plt.rcParams['font.family'] = 'sans-serif'
 plt.rcParams['font.sans-serif'] = ['Arial', 'Liberation Sans', 'DejaVu Sans']
 
-raw = np.loadtxt(sys.argv[1], comments='#')
+fname = sys.argv[1]
+out_dir = sys.argv[2]
+specs_str = sys.argv[3]    # e.g. "both:log:both_log inter:log:inter_log both:linear:both_linear"
+
+# Parse specs into list of (mode, yscale, suffix)
+specs = []
+for tok in specs_str.split():
+    parts = tok.split(':')
+    if len(parts) == 3:
+        specs.append((parts[0], parts[1], parts[2]))
+
+raw = np.loadtxt(fname, comments='#')
 if raw.ndim == 1:
     raw = raw.reshape(1, -1)
 
 ncol = raw.shape[1]
-if ncol == 4:
-    x = raw[:, 3]   # sign(lambda2)*rho
-    y = raw[:, 0]   # delta-g_inter
-elif ncol >= 5:
-    x = raw[:, 3]
-    y = raw[:, 4]
-else:
-    x = raw[:, 0]
-    y = raw[:, 1]
+# Multiwfn output.txt format (option 2 in post-process menu):
+#   col 0 = delta_g_inter  col 1 = delta_g_intra
+#   col 2 = delta_g         col 3 = sign(lambda2)*rho
+sl2r_full  = raw[:, 3]
+dg_inter_full = raw[:, 0]
+dg_intra_full = raw[:, 1] if ncol >= 2 else np.zeros_like(dg_inter_full)
 
-mask = y < 0.1
-x, y = x[mask], y[mask]
-
-if x.size > 80000:
-    idx = np.random.default_rng(42).choice(x.size, 80000, replace=False)
-    x, y = x[idx], y[idx]
-
+# Shared BGR colormap
 cmap = LinearSegmentedColormap.from_list('bgr', [
     (0.0, (0.0, 0.0, 1.0)), (0.33, (0.0, 0.75, 0.75)),
     (0.5, (0.0, 0.85, 0.0)), (0.67, (0.85, 0.85, 0.0)),
     (1.0, (1.0, 0.0, 0.0)),
 ])
 xmin, xmax = -0.05, 0.05
-colors = cmap(np.clip((x - xmin) / (xmax - xmin), 0, 1))
 
-fig, ax = plt.subplots(figsize=(8, 6), dpi=300)
-ax.scatter(x, y, c=colors, s=4.0, alpha=0.75, edgecolors='none', rasterized=True)
-ax.set_xlim(xmin, xmax)
-ax.set_ylim(0, max(0.05, np.percentile(y, 99.5) * 1.2))
-ax.set_xlabel('sign($\\lambda_2$)$\\rho$ (a.u.)', fontsize=20)
-ax.set_ylabel('$\\delta g_{inter}$ (a.u.)', fontsize=20)
-ax.tick_params(labelsize=16)
-ax.set_title('IGMH Scatter Plot', fontsize=26, fontweight='bold')
+for scatter_mode, yscale, suffix in specs:
+    out_png = f"{out_dir}/igmh_scatter_{suffix}.png"
 
-sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=xmin, vmax=xmax))
-sm.set_array([])
-cbar = fig.colorbar(sm, ax=ax, pad=0.02)
-cbar.set_label('sign($\\lambda_2$)$\\rho$', fontsize=16)
-cbar.ax.tick_params(labelsize=14)
+    # Filter per this spec's needs
+    mask = (sl2r_full > -0.2) & (sl2r_full < 0.2)
+    if yscale == 'log':
+        mask &= (dg_inter_full > 1e-10)
+        if scatter_mode in ('intra', 'both'):
+            mask &= (dg_intra_full > 1e-10)
+    sl2r = sl2r_full[mask].copy()
+    dg_inter = dg_inter_full[mask].copy()
+    dg_intra = dg_intra_full[mask].copy()
 
-fig.tight_layout()
-fig.savefig(sys.argv[2], dpi=300, bbox_inches='tight')
-plt.close(fig)
-print(f"  {sys.argv[2]}")
+    # Subsample for performance
+    if sl2r.size > 80000:
+        rng = np.random.default_rng(42)
+        idx = rng.choice(sl2r.size, 80000, replace=False)
+        sl2r = sl2r[idx]
+        dg_inter = dg_inter[idx]
+        dg_intra = dg_intra[idx]
+
+    colors = cmap(np.clip((sl2r - xmin) / (xmax - xmin), 0, 1))
+
+    fig, ax = plt.subplots(figsize=(8, 6), dpi=300)
+    plot_inter = scatter_mode in ('inter', 'both')
+    plot_intra = scatter_mode in ('intra', 'both')
+
+    if plot_inter and dg_inter.size > 0:
+        ax.scatter(sl2r, dg_inter, c=colors, s=4.0, alpha=0.75,
+                   edgecolors='none', rasterized=True, label=r'$\delta g_{inter}$')
+    if plot_intra and dg_intra.size > 0:
+        ax.scatter(sl2r, dg_intra, s=2.5, alpha=0.35,
+                   facecolors='#888888', edgecolors='none', rasterized=True,
+                   label=r'$\delta g_{intra}$')
+
+    ax.set_xlim(xmin, xmax)
+
+    if yscale == 'log':
+        ax.set_yscale('log')
+        all_y = []
+        if plot_inter and dg_inter.size > 0:
+            all_y.append(dg_inter[dg_inter > 0])
+        if plot_intra and dg_intra.size > 0:
+            all_y.append(dg_intra[dg_intra > 0])
+        if all_y:
+            combined = np.concatenate(all_y)
+            ylo = max(np.percentile(combined[combined > 0], 1) * 0.5, 1e-6)
+            yhi = min(max(np.percentile(combined, 99), 0.1), 1.0)
+            ax.set_ylim(ylo, yhi)
+    else:
+        yhi = 0
+        if plot_inter and dg_inter.size > 0:
+            yhi = max(yhi, np.percentile(dg_inter, 99.9))
+        if plot_intra and dg_intra.size > 0:
+            yhi = max(yhi, np.percentile(dg_intra, 99.9))
+        ax.set_ylim(0, min(yhi * 1.05, 0.25))
+
+    ax.set_xlabel(r'sign($\lambda_2$)$\rho$ (a.u.)', fontsize=20)
+    ylabel = r'$\delta g$ (a.u.)'
+    if yscale == 'log':
+        ylabel += '  [log scale]'
+    ax.set_ylabel(ylabel, fontsize=20)
+    ax.tick_params(labelsize=16)
+
+    title_parts = ['IGMH Scatter']
+    if scatter_mode == 'both':
+        title_parts.append(r'$\delta g_{inter}$ + $\delta g_{intra}$')
+    elif scatter_mode == 'inter':
+        title_parts.append(r'$\delta g_{inter}$ only')
+    else:
+        title_parts.append(r'$\delta g_{intra}$ only')
+    ax.set_title(' — '.join(title_parts), fontsize=22, fontweight='bold')
+
+    if plot_inter and plot_intra:
+        ax.legend(fontsize=14, loc='upper right', framealpha=0.8)
+
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=xmin, vmax=xmax))
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, pad=0.02)
+    cbar.set_label(r'sign($\lambda_2$)$\rho$', fontsize=16)
+    cbar.ax.tick_params(labelsize=14)
+
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  {out_png}")
 PYSCT
 }
 
@@ -1517,6 +1622,65 @@ fi
 ###############################################################################
 # Module 2: IGMH
 ###############################################################################
+# Helper: temporarily set IGMvdwscl in Multiwfn's settings.ini, returns backup path
+_igmh_enable_vdw_scl() {
+  local mwfn_dir
+  mwfn_dir="$(dirname "$MULTIWFN_EXE")"
+  local ini="$mwfn_dir/settings.ini"
+  [[ -f "$ini" ]] || return 1
+  local bak="${ini}.igmh_bak_$$"
+  cp "$ini" "$bak"
+  if [[ "$IGMH_VDW_SCL" != "0" ]]; then
+    sed -i "s/^  IGMvdwscl=.*/  IGMvdwscl= ${IGMH_VDW_SCL}/" "$ini"
+    echo "  IGMvdwscl = ${IGMH_VDW_SCL} (was backed up)"
+  fi
+  echo "$bak"
+}
+
+_igmh_restore_vdw_scl() {
+  local bak="$1"
+  local mwfn_dir
+  mwfn_dir="$(dirname "$MULTIWFN_EXE")"
+  local ini="$mwfn_dir/settings.ini"
+  [[ -f "$bak" && -f "$ini" ]] && mv "$bak" "$ini"
+}
+
+# Parse atmdg.txt → report top δG_pair and δG_atom
+_igmh_parse_atmdg() {
+  local f="$1"
+  [[ -f "$f" ]] || return 1
+  echo ""
+  echo "  ── IGMH δG index summary ──"
+
+  # Fragment-level δG_atom: use simple field splitting
+  awk '
+    /^Atomic delta-g indices of fragment/ { frag=1; print ""; print "  "$0; next }
+    frag && /^ Atom/ {
+      # Format: " Atom    2 :    0.123846  (  64.98 % )"
+      gsub(/[():]/, " ")
+      printf "    Atom %3s  δG_atom=%-10s (%5s%%)\n", $2, $3, $4
+      next
+    }
+    frag && /^$/ { frag=0 }
+  ' "$f"
+
+  # δG_pair: top entries
+  echo ""
+  awk '
+    /^ Atomic pair delta-g indices/ { in_pair=1; next }
+    in_pair && /^ *[0-9]+[[:space:]]+[0-9]+[[:space:]]*:/ {
+      gsub(/[():]/, " ")
+      printf "    Pair %s-%-3s  δG_pair=%-10s (%5s%%)\n", $1, $2, $3, $4
+      count++
+      if (count >= 6) exit
+      next
+    }
+  ' "$f"
+
+  # Total
+  awk '/^ Sum of all atomic pair/ { print ""; print "  "$0; }' "$f"
+  echo ""
+}
 if [[ "$RUN_IGMH" -eq 1 ]]; then
   echo ""
   echo "[*] ===== IGMH Analysis ====="
@@ -1528,22 +1692,58 @@ if [[ "$RUN_IGMH" -eq 1 ]]; then
 
   if [[ "$PLOT_ONLY" -eq 0 ]]; then
     MOLDEN_ABS="$PROJECT_ROOT/$DIR_N/TZVP.molden.input"
-    IGMH_INPUT="20\n11\n2\n${FRAG1_ATOMS}\n${FRAG2_ATOMS}\n-10\n6\n3\n8\n${IGMH_COLOR_MIN},${IGMH_COLOR_MAX}\n0\n3\n2\n0\n0\nq"
-    echo "[*] IGMH: frag1=$FRAG1_ATOMS  frag2=$FRAG2_ATOMS"
+
+    # Temporarily enable IGMvdwscl acceleration
+    VDW_BAK="$(_igmh_enable_vdw_scl)"
+    trap '[[ -n "${VDW_BAK:-}" ]] && _igmh_restore_vdw_scl "$VDW_BAK"' EXIT
+
+    # New Multiwfn sequence:
+    #   20  → Visual study of weak interaction
+    #   11  → IGMH analysis
+    #   2   → Two fragments
+    #   FRAG1_ATOMS / FRAG2_ATOMS
+    #   4   → Grid: spacing + cover whole system
+    #   IGMH_GRID (0.15)
+    #   --- IGMH computes grid data ---
+    #   2   → Output scatter points FIRST (unfiltered, full range)
+    #   8   → Filter δg_inter outside sign(λ2)ρ range (for isosurface)
+    #   COLOR_MIN,COLOR_MAX  → 0 (set to zero outside range)
+    #   3   → Output .cub files (filtered, for VMD isosurface)
+    #   6   → δG_atom / δG_pair evaluation
+    #   2   → High quality
+    #   y   → Export atmdg.pdb
+    #   0   → Exit post-processing
+    #   0   → Exit to main menu
+    #   q   → Quit
+    IGMH_INPUT="20\\n11\\n2\\n${FRAG1_ATOMS}\\n${FRAG2_ATOMS}\\n4\\n${IGMH_GRID}\\n2\\n8\\n${IGMH_COLOR_MIN},${IGMH_COLOR_MAX}\\n0\\n3\\n6\\n2\\ny\\n0\\n0\\nq"
+
+    echo "[*] IGMH: frag1=$FRAG1_ATOMS  frag2=$FRAG2_ATOMS  grid=${IGMH_GRID}  vdwscl=${IGMH_VDW_SCL}"
     echo -e "$IGMH_INPUT" | "$MULTIWFN_EXE" "$MOLDEN_ABS" > igmh.out 2>&1
+
+    # Restore settings.ini immediately (don't wait for EXIT trap)
+    [[ -n "${VDW_BAK:-}" ]] && _igmh_restore_vdw_scl "$VDW_BAK" && VDW_BAK=""
+    trap - EXIT
+
+    # Parse atmdg.txt if it was generated
+    if [[ -f atmdg.txt ]]; then
+      _igmh_parse_atmdg "atmdg.txt"
+    else
+      echo "  NOTE: atmdg.txt not generated (δG indices unavailable)"
+    fi
   fi
 
   if [[ -f sl2r.cub && -f dg_inter.cub ]]; then
     echo "  IGMH cubes: sl2r.cub, dg_inter.cub"
+    [[ -f dg_intra.cub ]] && echo "  IGMH cubes: dg_intra.cub, dg.cub"
     echo "[*] Rendering IGMH three views..."
     render_igmh_views "$PWD"
-    [[ -f output.txt ]] && { echo "[*] Generating IGMH scatter plot..."; render_igmh_scatter "$PWD"; }
+    [[ -f output.txt ]] && { echo "[*] Generating IGMH scatter plot..."; render_igmh_scatter "$PWD" "$IGMH_SCATTER_MODE" "$IGMH_SCATTER_YSCALE"; }
   elif [[ -f func1.cub && -f func2.cub ]]; then
     ln -sf func1.cub sl2r.cub
     ln -sf func2.cub dg_inter.cub
     echo "  IGMH cubes (legacy names): func1.cub -> sl2r.cub, func2.cub -> dg_inter.cub"
     render_igmh_views "$PWD"
-    [[ -f output.txt ]] && render_igmh_scatter "$PWD"
+    [[ -f output.txt ]] && render_igmh_scatter "$PWD" "$IGMH_SCATTER_MODE" "$IGMH_SCATTER_YSCALE"
   else
     echo "  WARNING: IGMH cubes not found. Cannot render."
   fi
@@ -1595,13 +1795,13 @@ if [[ "$RUN_MIGM" -eq 1 ]]; then
     echo "  mIGM cubes: sl2r.cub, dg_inter.cub"
     echo "[*] Rendering mIGM three views..."
     render_igmh_views "$PWD"
-    [[ -f output.txt ]] && { echo "[*] Generating mIGM scatter plot..."; render_igmh_scatter "$PWD"; }
+    [[ -f output.txt ]] && { echo "[*] Generating mIGM scatter plot..."; render_igmh_scatter "$PWD" "$IGMH_SCATTER_MODE" "$IGMH_SCATTER_YSCALE"; }
   elif [[ -f func1.cub && -f func2.cub ]]; then
     ln -sf func1.cub sl2r.cub
     ln -sf func2.cub dg_inter.cub
     echo "  mIGM cubes (legacy names): func1.cub -> sl2r.cub, func2.cub -> dg_inter.cub"
     render_igmh_views "$PWD"
-    [[ -f output.txt ]] && render_igmh_scatter "$PWD"
+    [[ -f output.txt ]] && render_igmh_scatter "$PWD" "$IGMH_SCATTER_MODE" "$IGMH_SCATTER_YSCALE"
   else
     echo "  WARNING: mIGM cubes not found. Cannot render."
   fi
