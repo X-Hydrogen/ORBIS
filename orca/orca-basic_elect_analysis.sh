@@ -1254,13 +1254,14 @@ w2, h2 = imgs[("lumo", "front")].size
 cell_w = max(w1, w2)
 cell_h = max(h1, h2)
 gap = 40
-label_h = 70
+label_h = 90
 footer_h = 55
 pw_two = cell_w + gap + cell_w
 total_h_side = label_h + cell_h + footer_h
-ft = _font(bold=True, size=68)
-fn = _font(bold=False, size=42)
-note = f"iso = \u00b1{iso:.4g}"
+ft = _font(bold=True, size=30)
+fe = _font(bold=False, size=22)
+fn = _font(bold=False, size=28)
+note = f"iso = \\u00b1{iso:.4g}"
 _tmp = Image.new("RGBA", (1, 1))
 _draw_tmp = ImageDraw.Draw(_tmp)
 nb = _draw_tmp.textbbox((0, 0), note, font=fn)
@@ -1273,9 +1274,13 @@ def save_view_canvas(view_name, img_left, img_right):
     d = ImageDraw.Draw(c)
     for label, x_off, energy_txt in [("HOMO", 0, homo_energy_str), ("LUMO", cell_w + gap, lumo_energy_str)]:
         bb = d.textbbox((0, 0), label, font=ft)
-        d.text((x_off + 20, (label_h - (bb[3] - bb[1])) / 2), label, fill=(30, 30, 30, 255), font=ft)
+        y_label = (label_h - (bb[3] - bb[1])) / 2
+        d.text((x_off + 20, y_label), label, fill=(30, 30, 30, 255), font=ft)
         if energy_txt:
-            d.text((x_off + 20 + (bb[2] - bb[0]) + 15, (label_h - (bb[3] - bb[1])) / 2), energy_txt, fill=(30, 30, 30, 255), font=ft)
+            eb = d.textbbox((0, 0), energy_txt, font=fe)
+            y_energy = (label_h - (eb[3] - eb[1])) / 2
+            ex = x_off + 20 + (bb[2] - bb[0]) + 14
+            d.text((ex, y_energy), energy_txt, fill=(80, 80, 80, 255), font=fe)
         d.line([(x_off + 20, label_h - 6), (x_off + cell_w - 20, label_h - 6)], fill=(180, 180, 180, 255), width=2)
     d.text(((pw_two - (nb[2] - nb[0])) / 2, note_y_side), note, fill=(50, 50, 50, 255), font=fn)
     c.save(out_dir / f"homo_lumo_{view_name}.png", format="PNG")
