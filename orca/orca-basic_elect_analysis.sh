@@ -486,6 +486,14 @@ TCLPRE
 
 vmd_element_color_overrides() {
   cat <<'TCLEL'
+# ── Fix VMD 1.9.3 default cyan Carbon → gray ──
+# VMD's default carbon is cyan (0.25, 0.75, 0.75). Tachyon Glossy specular
+# washes this to gray on large spheres but thin bond cylinders retain the
+# blue-green cast, making C-H and C-S bond halves near C appear blue -- 
+# confusingly resembling N bonds.  Override to neutral mid-gray.
+set carbon_color_id [colorinfo category Name C]
+color change rgb $carbon_color_id 0.43 0.43 0.43
+catch { color Element C $carbon_color_id }
 # Optional element color overrides from env(IQCAP_ELEMENT_COLORS)
 # Format examples:
 #   Na=#1f77b4;S=#ffcc00
@@ -533,6 +541,7 @@ render_esp_three_views() {
 
   {
     vmd_quality_preamble
+    vmd_element_color_overrides
     cat <<'TCLBONDS'
 # Add bonds that VMD may not infer (e.g. Li-S). Distance threshold in Angstrom.
 proc add_bonds_by_distance { molid elem1 elem2 max_dist } {
@@ -650,7 +659,7 @@ quit
 EOF
   } > "$out_dir/render_esp.tcl"
 
-  "$VMD_EXE" -dispdev text -e "$out_dir/render_esp.tcl" > "$out_dir/esp_render.out" 2>&1
+  env -i HOME="$HOME" PATH="$PATH" vmd -dispdev text -e "$out_dir/render_esp.tcl" > /dev/null 2>&1
 
   for v in front side top; do
     [[ -f "$out_dir/esp_${v}.tga" ]] || { echo "Missing esp_${v}.tga" >&2; return 1; }

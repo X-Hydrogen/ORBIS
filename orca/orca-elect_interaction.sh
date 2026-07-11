@@ -2370,7 +2370,7 @@ if [[ "$RUN_CHGDIFF" -eq 1 ]]; then
   NEL_FULL=$(python3 - "$ROOT_ABS/opt.xyz" <<'PYNEL'
 import sys
 from pathlib import Path
-zmap={'H':1,'He':2,'Li':3,'Be':4,'B':5,'C':6,'N':7,'O':8,'F':9}
+zmap={'H':1,'He':2,'Li':3,'Be':4,'B':5,'C':6,'N':7,'O':8,'F':9,'Na':11,'Mg':12,'Al':13,'Si':14,'P':15,'S':16,'Cl':17,'K':19,'Ca':20,'Br':35,'I':53}
 lines=Path(sys.argv[1]).read_text().splitlines()
 n=int(lines[0])
 total=sum(zmap.get(ln.split()[0][0].upper()+(ln.split()[0][1:].lower() if len(ln.split()[0])>1 else ''),0) for ln in lines[2:2+n] if ln.strip())
@@ -2379,13 +2379,13 @@ PYNEL
   ) || echo 10
   NEL_A=$(python3 -c "
 from pathlib import Path
-zmap={'H':1,'He':2,'Li':3,'Be':4,'B':5,'C':6,'N':7,'O':8,'F':9}
+zmap={'H':1,'He':2,'Li':3,'Be':4,'B':5,'C':6,'N':7,'O':8,'F':9,'Na':11,'Mg':12,'Al':13,'Si':14,'P':15,'S':16,'Cl':17,'K':19,'Ca':20,'Br':35,'I':53}
 lines=Path('fragA.xyz').read_text().splitlines()
 print(sum(zmap.get(ln.split()[0][0].upper()+(ln.split()[0][1:].lower() if len(ln.split()[0])>1 else ''),0) for ln in lines[2:] if ln.strip()))
 " 2>/dev/null || echo 9)
   NEL_B=$(python3 -c "
 from pathlib import Path
-zmap={'H':1,'He':2,'Li':3,'Be':4,'B':5,'C':6,'N':7,'O':8,'F':9}
+zmap={'H':1,'He':2,'Li':3,'Be':4,'B':5,'C':6,'N':7,'O':8,'F':9,'Na':11,'Mg':12,'Al':13,'Si':14,'P':15,'S':16,'Cl':17,'K':19,'Ca':20,'Br':35,'I':53}
 lines=Path('fragB.xyz').read_text().splitlines()
 print(sum(zmap.get(ln.split()[0][0].upper()+(ln.split()[0][1:].lower() if len(ln.split()[0])>1 else ''),0) for ln in lines[2:] if ln.strip()))
 " 2>/dev/null || echo 1)
@@ -2648,7 +2648,7 @@ PYN
     Z_FULL=$(python3 - "$PWD/geom.xyz" <<'PYNEL'
 import sys
 from pathlib import Path
-zmap={'H':1,'He':2,'Li':3,'Be':4,'B':5,'C':6,'N':7,'O':8,'F':9}
+zmap={'H':1,'He':2,'Li':3,'Be':4,'B':5,'C':6,'N':7,'O':8,'F':9,'Na':11,'Mg':12,'Al':13,'Si':14,'P':15,'S':16,'Cl':17,'K':19,'Ca':20,'Br':35,'I':53}
 lines=Path(sys.argv[1]).read_text().splitlines()
 n=int(lines[0])
 print(sum(zmap.get(ln.split()[0][0].upper()+(ln.split()[0][1:].lower() if len(ln.split()[0])>1 else ''),0) for ln in lines[2:2+n] if ln.strip()))
@@ -2700,7 +2700,7 @@ PYNEL
       NEL_F=$(python3 - "$CDA_DIR/frag${fidx}.xyz" "$charge" <<'PYNEL'
 import sys
 from pathlib import Path
-zmap={'H':1,'He':2,'Li':3,'Be':4,'B':5,'C':6,'N':7,'O':8,'F':9}
+zmap={'H':1,'He':2,'Li':3,'Be':4,'B':5,'C':6,'N':7,'O':8,'F':9,'Na':11,'Mg':12,'Al':13,'Si':14,'P':15,'S':16,'Cl':17,'K':19,'Ca':20,'Br':35,'I':53}
 lines=Path(sys.argv[1]).read_text().splitlines()
 n=int(lines[0])
 charge=int(sys.argv[2])

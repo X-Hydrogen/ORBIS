@@ -147,6 +147,7 @@ def run_iqcap(module: str, args: str, workdir: str = None) -> str:
         "report": "orca-report.sh",
         "adsorption": "orca-adsorption_energy.sh",
         "2d_figs": "orca-2D_elect_figs.sh",
+        "cpcm_sp": "orca-sp-CPCM.sh",
     }
 
     script = module_map.get(module)
